@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,10 +22,11 @@ import (
 
 // Options 是 [Service] 的运行参数，零值都有合理默认。
 type Options struct {
-	CacheDir    string // 合成结果磁盘缓存目录；空 = 不缓存
-	CacheLimit  int64  // 缓存容量上限（字节），默认 512MB，超出按最近使用淘汰到 80%
-	MaxInFlight int    // 同时向上游发起的合成数，默认 4；公开接口靠它防止把 CPU / 配额打满
-	MaxRunes    int    // 单段文字上限，默认 600
+	CacheDir    string    // 合成结果磁盘缓存目录；空 = 不缓存
+	Builtin     []Builtin // 内置提供商（本地模型），排在配置的第三方之前，ID 不能被配置占用
+	CacheLimit  int64     // 缓存容量上限（字节），默认 512MB，超出按最近使用淘汰到 80%
+	MaxInFlight int       // 同时向上游发起的合成数，默认 4；公开接口靠它防止把 CPU / 配额打满
+	MaxRunes    int       // 单段文字上限，默认 600
 	HTTPClient  *http.Client
 }
 
@@ -37,9 +39,17 @@ type Voice struct {
 	ProviderName string `json:"provider_name"`
 }
 
+// Builtin 是不经配置、由程序直接提供的提供商（sherpa-tts 的本地模型）。
+type Builtin struct {
+	ID       string
+	Name     string
+	Provider Provider
+}
+
 type entry struct {
 	cfg      ProviderConfig
 	provider Provider
+	builtin  bool
 }
 
 // Service 汇总多家提供商，负责音色列表、按音色路由合成、磁盘缓存和并发控制。可并发使用，配置可热更新。
@@ -86,8 +96,14 @@ func (s *Service) Update(cfg Config) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	entries := make([]entry, 0, len(cfg.Providers))
+	entries := make([]entry, 0, len(s.opts.Builtin)+len(cfg.Providers))
+	for _, b := range s.opts.Builtin {
+		entries = append(entries, entry{cfg: ProviderConfig{ID: b.ID, Type: "builtin", Name: b.Name}, provider: b.Provider, builtin: true})
+	}
 	for _, pc := range cfg.Providers {
+		if s.reserved(pc.ID) {
+			return fmt.Errorf("提供商 ID %q 已被内置提供商占用", pc.ID)
+		}
 		if pc.Disabled {
 			continue
 		}
@@ -105,6 +121,15 @@ func (s *Service) Update(cfg Config) error {
 	s.cfg, s.entries = cfg, entries
 	s.mu.Unlock()
 	return nil
+}
+
+func (s *Service) reserved(id string) bool {
+	for _, b := range s.opts.Builtin {
+		if b.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // Config 返回当前配置（含密钥，勿直接返回给前端，用 View）。
@@ -160,7 +185,7 @@ func (s *Service) Voices(ctx context.Context) []Voice {
 	return out
 }
 
-// route 把全局音色 ID 拆成提供商和其内部音色。兼容旧版只有「引擎:编号」的 sherpa 音色（如 melo:0）。
+// route 把全局音色 ID 拆成提供商和其内部音色。兼容旧版只有「引擎:编号」的本地音色（如 melo:0）。
 func (s *Service) route(voiceID string) (entry, string, bool) {
 	entries, _ := s.snapshot()
 	providerID, local, ok := strings.Cut(voiceID, ":")
@@ -171,10 +196,10 @@ func (s *Service) route(voiceID string) (entry, string, bool) {
 			}
 		}
 	}
-	// 旧客户端存的是 sherpa 的「引擎:编号」（如 melo:0），交给第一个 sherpa 提供商。
+	// 旧客户端存的是本地模型的「引擎:编号」（如 melo:0），交给第一个内置提供商。
 	if engine, sid, ok := strings.Cut(voiceID, ":"); ok && engine != "" && isDigits(sid) {
 		for _, e := range entries {
-			if e.cfg.Type == TypeSherpa {
+			if e.builtin {
 				return e, voiceID, true
 			}
 		}

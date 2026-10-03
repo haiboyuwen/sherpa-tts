@@ -1,6 +1,6 @@
 # 单独试跑：docker compose up -d，然后
-#   curl -s http://127.0.0.1:8000/health
-#   curl -s -X POST http://127.0.0.1:8000/synthesize -d '{"engine":"melo","voice":0,"text":"你好，世界"}' -o hello.mp3
+#   curl -s http://127.0.0.1:8000/v1/voices
+#   curl -s -X POST http://127.0.0.1:8000/v1/synthesize -d '{"voice":"local:melo:0","text":"你好，世界"}' -o hello.mp3
 services:
   tts:
     image: ghcr.io/haiboyuwen/sherpa-tts:latest
@@ -9,8 +9,13 @@ services:
     init: true
     ports:
       - "127.0.0.1:8000:8000"
+    environment:
+      # 设置后 /v1/* 需要 Authorization: Bearer <token>；生产环境务必设置。
+      TTS_API_TOKEN: ${TTS_API_TOKEN:-}
     volumes:
       - tts-models:/models
+      - tts-data:/data
 
 volumes:
   tts-models:
+  tts-data:

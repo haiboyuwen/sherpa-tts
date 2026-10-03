@@ -1,10 +1,8 @@
-// Package tts 是多家语音合成服务的统一客户端：本地 sherpa-tts 服务、OpenAI 兼容接口、
-// Azure 语音、阿里云百炼（CosyVoice / Qwen-TTS）、火山引擎豆包语音。
+// Package tts 是 sherpa-tts 网关的提供商层：内置的本地模型（由 main 包以 [Builtin] 注入）
+// 加上可配置的第三方服务——OpenAI 兼容接口、Azure 语音、阿里云百炼（CosyVoice / Qwen-TTS）、火山引擎豆包。
 //
-// 应用后端用 [Service] 汇总所有已启用提供商的音色、按「提供商:音色」合成并做磁盘缓存，
-// 再把 [Service.VoicesHandler]、[Service.SynthesizeHandler] 挂到自己的路由上；
-// 管理后台用 [Config.View]、[MergeUpdate]、[TestProvider] 和 [ProviderTypes] 做配置页。
-// 纯 Go，无 CGO。
+// [Service] 汇总所有提供商的音色、按「提供商:音色」路由合成并做磁盘缓存；
+// [Config.View]、[MergeUpdate]、[TestProvider] 和 [ProviderTypes] 支撑配置接口。纯 Go，无 CGO。
 package tts
 
 import (
@@ -20,7 +18,6 @@ import (
 
 // 提供商类型。
 const (
-	TypeSherpa     = "sherpa"     // 本地 sherpa-tts 服务（/health + /synthesize）
 	TypeOpenAI     = "openai"     // OpenAI /v1/audio/speech 及兼容实现
 	TypeAzure      = "azure"      // Azure AI Speech REST（SSML）
 	TypeDashScope  = "dashscope"  // 阿里云百炼：CosyVoice（WebSocket）/ Qwen-TTS（HTTP）
@@ -48,7 +45,7 @@ type ProviderConfig struct {
 	Cluster      string `json:"cluster,omitempty"`      // 火山引擎
 	Instructions string `json:"instructions,omitempty"` // OpenAI gpt-4o-mini-tts 的朗读风格提示
 
-	// Voices 为空时用提供商的默认音色（sherpa、Azure 会在线查询）。
+	// Voices 为空时用提供商的默认音色（Azure 会在线查询）。
 	Voices         []VoiceOption `json:"voices,omitempty"`
 	TimeoutSeconds int           `json:"timeout_seconds,omitempty"`
 
@@ -263,7 +260,6 @@ func SaveFile(path string, cfg Config) error {
 
 // ConfigFromEnv 从环境变量构造配置，供首次启动或未保存后台配置时使用。prefix 如 "TTS_"、"MEDIAVAULT_TTS_"。
 //
-//	{prefix}URL                         本地 sherpa-tts 服务地址 → 提供商 local
 //	{prefix}OPENAI_API_KEY / _BASE_URL / _MODEL / _VOICES / _INSTRUCTIONS
 //	{prefix}AZURE_API_KEY / _REGION / _BASE_URL / _VOICES
 //	{prefix}DASHSCOPE_API_KEY / _MODEL / _BASE_URL / _VOICES
@@ -277,9 +273,6 @@ func ConfigFromEnv(prefix string, getenv func(string) string) Config {
 	}
 	env := func(key string) string { return strings.TrimSpace(getenv(prefix + key)) }
 	var cfg Config
-	if url := env("URL"); url != "" {
-		cfg.Providers = append(cfg.Providers, ProviderConfig{ID: "local", Type: TypeSherpa, Name: "本地 sherpa-tts", BaseURL: url})
-	}
 	if key, base := env("OPENAI_API_KEY"), env("OPENAI_BASE_URL"); key != "" || base != "" {
 		cfg.Providers = append(cfg.Providers, ProviderConfig{
 			ID: "openai", Type: TypeOpenAI, APIKey: key, BaseURL: base, Model: env("OPENAI_MODEL"),

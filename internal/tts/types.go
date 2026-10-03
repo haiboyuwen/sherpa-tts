@@ -17,22 +17,12 @@ type TypeMeta struct {
 	Help   string        `json:"help,omitempty"`
 	DocURL string        `json:"doc_url,omitempty"`
 	Fields []FieldMeta   `json:"fields"`
-	Voices []VoiceOption `json:"default_voices,omitempty"` // 留空音色列表时使用的默认音色（sherpa/Azure 另会在线查询）
+	Voices []VoiceOption `json:"default_voices,omitempty"` // 留空音色列表时使用的默认音色（Azure 另会在线查询）
 	// VoicesOnline 为 true 表示不填音色时会向服务在线查询。
 	VoicesOnline bool `json:"voices_online,omitempty"`
 }
 
 var providerTypes = []TypeMeta{
-	{
-		Type:   TypeSherpa,
-		Label:  "本地 sherpa-tts",
-		Help:   "自建 Docker 服务 ghcr.io/haiboyuwen/sherpa-tts（Kokoro / MeloTTS，纯 CPU，免费，数据不出内网）。音色自动从服务读取。",
-		DocURL: "https://github.com/haiboyuwen/sherpa-tts",
-		Fields: []FieldMeta{
-			{Key: "base_url", Label: "服务地址", Required: true, Placeholder: "http://tts:8000"},
-		},
-		VoicesOnline: true,
-	},
 	{
 		Type:   TypeOpenAI,
 		Label:  "OpenAI 兼容",

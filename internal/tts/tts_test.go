@@ -18,58 +18,42 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func sherpaStub(t *testing.T, calls *atomic.Int32) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/health":
-			_, _ = w.Write([]byte(`{"engines":{
-				"melo":{"ready":true,"voices":[{"id":0,"label":"MeloTTS 中文"}]},
-				"kokoro":{"ready":false,"voices":[{"id":3,"label":"Kokoro 中文 3"}]}}}`))
-		case "/synthesize":
-			if calls != nil {
-				calls.Add(1)
-			}
-			var req struct {
-				Engine string `json:"engine"`
-				Voice  int    `json:"voice"`
-				Text   string `json:"text"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&req)
-			if req.Engine != "melo" || req.Voice != 0 {
-				http.Error(w, "bad voice", http.StatusBadRequest)
-				return
-			}
-			w.Header().Set("Content-Type", "audio/mpeg")
-			_, _ = w.Write([]byte("MP3:" + req.Text))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+// fakeLocal 模拟内置的本地模型提供商。
+type fakeLocal struct{ calls atomic.Int32 }
+
+func (f *fakeLocal) Voices(context.Context) ([]VoiceOption, error) {
+	return []VoiceOption{{ID: "melo:0", Label: "MeloTTS 中文"}}, nil
 }
 
-func newService(t *testing.T, cfg Config) *Service {
+func (f *fakeLocal) Synthesize(_ context.Context, voice, text string) (Audio, error) {
+	f.calls.Add(1)
+	if voice != "melo:0" {
+		return Audio{}, &ProviderError{Provider: "local", Message: "bad voice"}
+	}
+	return Audio{Data: []byte("MP3:" + text), ContentType: "audio/mpeg"}, nil
+}
+
+func newService(t *testing.T, cfg Config, local Provider) *Service {
 	t.Helper()
-	s, err := New(cfg, Options{CacheDir: t.TempDir()})
+	opts := Options{CacheDir: t.TempDir()}
+	if local != nil {
+		opts.Builtin = []Builtin{{ID: "local", Name: "本地模型", Provider: local}}
+	}
+	s, err := New(cfg, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return s
 }
 
-func TestServiceVoicesAggregatesReadyProviders(t *testing.T) {
-	sherpa := sherpaStub(t, nil)
+func TestServiceVoicesAggregatesBuiltinAndConfigured(t *testing.T) {
 	s := newService(t, Config{
 		DefaultVoice: "openai:nova",
 		Providers: []ProviderConfig{
-			{ID: "local", Type: TypeSherpa, BaseURL: sherpa.URL},
 			{ID: "openai", Type: TypeOpenAI, APIKey: "k", Voices: []VoiceOption{{ID: "nova", Label: "Nova"}}},
 			{ID: "off", Type: TypeOpenAI, Disabled: true},
-			{ID: "dead", Type: TypeSherpa, BaseURL: "http://127.0.0.1:1"},
 		},
-	})
+	}, &fakeLocal{})
 	resp := s.VoicesResponse(context.Background())
 	var ids []string
 	for _, v := range resp.Voices {
@@ -78,28 +62,28 @@ func TestServiceVoicesAggregatesReadyProviders(t *testing.T) {
 	if got := strings.Join(ids, ","); got != "local:melo:0,openai:nova" {
 		t.Fatalf("voices = %s", got)
 	}
-	if !resp.Available || resp.DefaultVoice != "openai:nova" {
+	if !resp.Available || resp.DefaultVoice != "openai:nova" || resp.Voices[0].ProviderName != "本地模型" {
 		t.Fatalf("unexpected response %+v", resp)
 	}
-	if resp.Voices[0].ProviderName != "本地 sherpa-tts" {
-		t.Fatalf("provider name = %q", resp.Voices[0].ProviderName)
+	// 配置里的提供商不能占用内置 ID。
+	if err := s.Update(Config{Providers: []ProviderConfig{{ID: "local", Type: TypeOpenAI}}}); err == nil {
+		t.Fatal("builtin id should be reserved")
 	}
 }
 
 func TestServiceCachesAndRoutesLegacyVoice(t *testing.T) {
-	var calls atomic.Int32
-	sherpa := sherpaStub(t, &calls)
-	s := newService(t, Config{Providers: []ProviderConfig{{ID: "local", Type: TypeSherpa, BaseURL: sherpa.URL}}})
+	local := &fakeLocal{}
+	s := newService(t, Config{}, local)
 	for i := 0; i < 2; i++ {
 		audio, err := s.Synthesize(context.Background(), "local:melo:0", " 你好 ")
 		if err != nil || string(audio.Data) != "MP3:你好" || audio.ContentType != "audio/mpeg" {
 			t.Fatalf("round %d: %v %q %q", i, err, audio.Data, audio.ContentType)
 		}
 	}
-	if calls.Load() != 1 {
-		t.Fatalf("upstream called %d times, want 1", calls.Load())
+	if local.calls.Load() != 1 {
+		t.Fatalf("provider called %d times, want 1", local.calls.Load())
 	}
-	// 旧客户端存的「melo:0」仍然路由到 sherpa（同一段文字，缓存键不同但结果一致）。
+	// 旧客户端存的「melo:0」路由到内置本地模型。
 	if _, err := s.Synthesize(context.Background(), "melo:0", "旧音色"); err != nil {
 		t.Fatalf("legacy voice: %v", err)
 	}
@@ -109,12 +93,11 @@ func TestServiceCachesAndRoutesLegacyVoice(t *testing.T) {
 }
 
 func TestServiceRejectsBadInput(t *testing.T) {
-	s := newService(t, Config{})
+	s := newService(t, Config{}, nil)
 	if _, err := s.Synthesize(context.Background(), "x:y", "你好"); err != ErrUnavailable {
 		t.Fatalf("no providers: %v", err)
 	}
-	sherpa := sherpaStub(t, nil)
-	s = newService(t, Config{Providers: []ProviderConfig{{ID: "local", Type: TypeSherpa, BaseURL: sherpa.URL}}})
+	s = newService(t, Config{}, &fakeLocal{})
 	if _, err := s.Synthesize(context.Background(), "local:melo:0", strings.Repeat("字", 601)); err != ErrTextTooLong {
 		t.Fatalf("too long: %v", err)
 	}
@@ -124,20 +107,19 @@ func TestServiceRejectsBadInput(t *testing.T) {
 }
 
 func TestHandlers(t *testing.T) {
-	sherpa := sherpaStub(t, nil)
-	s := newService(t, Config{Providers: []ProviderConfig{{ID: "local", Type: TypeSherpa, BaseURL: sherpa.URL}}})
+	s := newService(t, Config{}, &fakeLocal{})
 	rec := httptest.NewRecorder()
-	s.SynthesizeHandler()(rec, httptest.NewRequest(http.MethodPost, "/tts", strings.NewReader(`{"voice":"local:melo:0","text":"你好"}`)))
+	s.SynthesizeHandler()(rec, httptest.NewRequest(http.MethodPost, "/v1/synthesize", strings.NewReader(`{"voice":"local:melo:0","text":"你好"}`)))
 	if rec.Code != 200 || rec.Header().Get("Content-Type") != "audio/mpeg" || rec.Body.String() != "MP3:你好" {
 		t.Fatalf("synth: %d %q %q", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
 	}
 	rec = httptest.NewRecorder()
-	s.SynthesizeHandler()(rec, httptest.NewRequest(http.MethodPost, "/tts", strings.NewReader(`{"voice":"","text":"你好"}`)))
+	s.SynthesizeHandler()(rec, httptest.NewRequest(http.MethodPost, "/v1/synthesize", strings.NewReader(`{"voice":"","text":"你好"}`)))
 	if rec.Code != 400 {
 		t.Fatalf("missing voice status %d", rec.Code)
 	}
 	rec = httptest.NewRecorder()
-	s.VoicesHandler()(rec, httptest.NewRequest(http.MethodGet, "/tts/voices", nil))
+	s.VoicesHandler()(rec, httptest.NewRequest(http.MethodGet, "/v1/voices", nil))
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"available":true`) {
 		t.Fatalf("voices: %d %s", rec.Code, rec.Body.String())
 	}
@@ -150,7 +132,7 @@ func TestConfigValidateAndMerge(t *testing.T) {
 		{Providers: []ProviderConfig{{ID: "a", Type: "nope"}}},
 		{Providers: []ProviderConfig{{ID: "a", Type: TypeAzure, APIKey: "k"}}},
 		{Providers: []ProviderConfig{{ID: "a", Type: TypeVolcengine, APIKey: "k"}}},
-		{Providers: []ProviderConfig{{ID: "a", Type: TypeSherpa, BaseURL: "ftp://tts"}}},
+		{Providers: []ProviderConfig{{ID: "a", Type: TypeOpenAI, BaseURL: "ftp://tts"}}},
 		{Providers: []ProviderConfig{{ID: "a", Type: TypeOpenAI, BaseURL: "https://user:pw@api.example.com"}}},
 	}
 	for i, c := range bad {
@@ -179,7 +161,6 @@ func TestConfigValidateAndMerge(t *testing.T) {
 
 func TestConfigFromEnvAndFile(t *testing.T) {
 	env := map[string]string{
-		"TTS_URL":                     "http://tts:8000/",
 		"TTS_OPENAI_API_KEY":          "sk",
 		"TTS_OPENAI_VOICES":           "nova=新星, alloy",
 		"TTS_VOLCENGINE_APP_ID":       "app",
@@ -187,7 +168,7 @@ func TestConfigFromEnvAndFile(t *testing.T) {
 		"TTS_DEFAULT_VOICE":           "openai:nova",
 	}
 	cfg := ConfigFromEnv("TTS_", func(k string) string { return env[k] })
-	if len(cfg.Providers) != 3 || cfg.Providers[0].BaseURL != "http://tts:8000" || cfg.Providers[1].Voices[0] != (VoiceOption{ID: "nova", Label: "新星"}) || cfg.DefaultVoice != "openai:nova" {
+	if len(cfg.Providers) != 2 || cfg.Providers[0].Voices[0] != (VoiceOption{ID: "nova", Label: "新星"}) || cfg.DefaultVoice != "openai:nova" {
 		t.Fatalf("env config = %+v", cfg)
 	}
 	if err := cfg.Validate(); err != nil {
@@ -204,7 +185,7 @@ func TestConfigFromEnvAndFile(t *testing.T) {
 		t.Fatalf("perm = %v", info.Mode().Perm())
 	}
 	loaded, ok, err := LoadFile(path)
-	if err != nil || !ok || len(loaded.Providers) != 3 || loaded.Providers[1].APIKey != "sk" {
+	if err != nil || !ok || len(loaded.Providers) != 2 || loaded.Providers[0].APIKey != "sk" {
 		t.Fatalf("loaded = %+v ok=%v err=%v", loaded, ok, err)
 	}
 }

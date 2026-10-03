@@ -1,6 +1,6 @@
 name: CI
 
-# 测试 Go 客户端库（tts/），构建并推送 ghcr.io/<owner>/sherpa-tts（linux/amd64 + linux/arm64）。
+# 测试网关与提供商层，构建并推送 ghcr.io/<owner>/sherpa-tts（linux/amd64 + linux/arm64）。
 #   - push to main → latest + sha-<hash>
 #   - tag v*       → 对应 semver 标签（v1.2.3 → 1.2.3、1.2）
 #   - pull_request → 只构建，不推送
@@ -26,16 +26,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: stable
-      - name: Library
-        run: |
-          test -z "$(gofmt -l tts server)"
-          go vet ./...
-          go test -race -count=1 ./...
-      - name: Server (vet)
-        working-directory: server
+      - name: Test
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends libmp3lame-dev
+          test -z "$(gofmt -l .)"
           go vet ./...
+          go test -race -count=1 ./...
 
   docker:
     name: Build & Push

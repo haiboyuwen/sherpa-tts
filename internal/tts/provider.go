@@ -30,8 +30,6 @@ func NewProvider(cfg ProviderConfig, hc *http.Client) (Provider, error) {
 		hc = &http.Client{Timeout: time.Duration(cfg.timeoutOr(60)) * time.Second}
 	}
 	switch cfg.Type {
-	case TypeSherpa:
-		return &sherpaProvider{cfg: cfg, hc: hc}, nil
 	case TypeOpenAI:
 		return &openAIProvider{cfg: cfg, hc: hc}, nil
 	case TypeAzure:

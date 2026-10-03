@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"compress/bzip2"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,10 +13,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/haiboyuwen/sherpa-tts/internal/tts"
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
 )
 
@@ -261,4 +264,35 @@ func untar(tr *tar.Reader, dest string) error {
 			}
 		}
 	}
+}
+
+// localProvider 把本地引擎包装成网关的内置提供商：音色 ID 为「引擎:编号」，如 melo:0。
+type localProvider struct{ reg *registry }
+
+func (p localProvider) Voices(context.Context) ([]tts.VoiceOption, error) {
+	var voices []tts.VoiceOption
+	for _, name := range p.reg.names() {
+		e := p.reg.engines[name]
+		if !e.isReady() {
+			continue
+		}
+		for _, v := range e.spec.voices {
+			voices = append(voices, tts.VoiceOption{ID: name + ":" + strconv.Itoa(v.ID), Label: v.Label})
+		}
+	}
+	return voices, nil
+}
+
+func (p localProvider) Synthesize(_ context.Context, voice, text string) (tts.Audio, error) {
+	name, sid, _ := strings.Cut(voice, ":")
+	id, err := strconv.Atoi(sid)
+	e, ok := p.reg.engines[name]
+	if err != nil || !ok {
+		return tts.Audio{}, &tts.ProviderError{Provider: "本地模型", Message: "未知音色 " + voice}
+	}
+	audio, err := e.synthesize(id, text)
+	if err != nil {
+		return tts.Audio{}, &tts.ProviderError{Provider: "本地模型", Message: err.Error()}
+	}
+	return tts.Audio{Data: audio, ContentType: "audio/mpeg"}, nil
 }
