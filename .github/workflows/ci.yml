@@ -1,6 +1,6 @@
-name: Docker
+name: CI
 
-# 构建并推送 ghcr.io/<owner>/sherpa-tts（linux/amd64 + linux/arm64）。
+# 测试 Go 客户端库（tts/），构建并推送 ghcr.io/<owner>/sherpa-tts（linux/amd64 + linux/arm64）。
 #   - push to main → latest + sha-<hash>
 #   - tag v*       → 对应 semver 标签（v1.2.3 → 1.2.3、1.2）
 #   - pull_request → 只构建，不推送
@@ -18,8 +18,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.3.1
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Library
+        run: |
+          test -z "$(gofmt -l tts server)"
+          go vet ./...
+          go test -race -count=1 ./...
+      - name: Server (vet)
+        working-directory: server
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libmp3lame-dev
+          go vet ./...
+
   docker:
     name: Build & Push
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -40,7 +60,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
-      # sherpa-onnx / lameenc 都发 linux x86_64 与 aarch64 的预编译 wheel，QEMU 里不用编译。
+      # 服务需要 CGO（sherpa-onnx、libmp3lame）；arm64 在 QEMU 里编译，只链接预编译库，耗时可接受。
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3.7.0
 

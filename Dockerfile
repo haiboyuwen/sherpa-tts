@@ -1,11 +1,31 @@
-# sherpa-tts：本地中文 TTS（sherpa-onnx，CPU）。模型不进镜像：首次启动下载到 /models 卷。
-FROM python:3.12-slim
-RUN pip install --no-cache-dir sherpa-onnx==1.13.8 numpy==2.5.3 lameenc==1.8.4
-WORKDIR /app
-COPY server.py .
+# sherpa-tts：本地中文 TTS 服务（Go + sherpa-onnx，CPU）。模型不进镜像：首次启动下载到 /models 卷。
+FROM golang:1.26-bookworm AS build
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends libmp3lame-dev \
+  && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY server/go.mod server/go.sum ./
+RUN go mod download
+COPY server/ ./
+# sherpa-onnx-go-linux 自带预编译的 onnxruntime / sherpa-onnx 动态库，按架构拷出来放进运行镜像。
+RUN CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /out/sherpa-tts . \
+  && case "$(uname -m)" in \
+       x86_64) triple=x86_64-unknown-linux-gnu ;; \
+       aarch64) triple=aarch64-unknown-linux-gnu ;; \
+       *) echo "unsupported arch $(uname -m)" >&2; exit 1 ;; \
+     esac \
+  && mkdir -p /out/lib \
+  && cp "$(go env GOMODCACHE)"/github.com/k2-fsa/sherpa-onnx-go-linux@*/lib/"$triple"/*.so /out/lib/
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends libmp3lame0 ca-certificates tzdata \
+  && rm -rf /var/lib/apt/lists/*
+COPY --from=build /out/lib/ /usr/local/lib/
+RUN ldconfig
+COPY --from=build /out/sherpa-tts /usr/local/bin/sherpa-tts
 ENV TTS_MODEL_DIR=/models
 VOLUME /models
 EXPOSE 8000
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
-CMD ["python", "server.py"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD ["sherpa-tts", "-healthcheck"]
+ENTRYPOINT ["sherpa-tts"]
