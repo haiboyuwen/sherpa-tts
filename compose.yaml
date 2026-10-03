@@ -1,0 +1,16 @@
+# 单独试跑：docker compose up -d，然后
+#   curl -s http://127.0.0.1:8000/health
+#   curl -s -X POST http://127.0.0.1:8000/synthesize -d '{"engine":"melo","voice":0,"text":"你好，世界"}' -o hello.mp3
+services:
+  tts:
+    image: ghcr.io/haiboyuwen/sherpa-tts:latest
+    build: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - tts-models:/models
+
+volumes:
+  tts-models:
