@@ -36,16 +36,21 @@ func main() {
 	if threads <= 0 {
 		threads = 4
 	}
+	dataDir := env("TTS_DATA_DIR", "/data")
 	// TTS_ENGINES 设为 none 可以只做第三方网关、不下载本地模型。
+	// zipvoice 克隆音色的参考音频放在数据卷的 voices/ 目录（<名字>.wav + <名字>.txt）。
+	voicesDir := filepath.Join(dataDir, "voices")
+	if err := os.MkdirAll(voicesDir, 0o755); err != nil {
+		log.Fatalf("创建音色目录失败: %v", err)
+	}
 	reg := newRegistry(
 		env("TTS_MODEL_DIR", "/models"),
+		voicesDir,
 		env("TTS_MODEL_MIRROR", "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models"),
 		threads,
-		strings.Split(env("TTS_ENGINES", "melo,kokoro"), ","),
+		strings.Split(env("TTS_ENGINES", "melo,zipvoice"), ","),
 	)
 	reg.loadAll()
-
-	dataDir := env("TTS_DATA_DIR", "/data")
 	gw, err := newGateway(gatewayOptions{
 		registry:   reg,
 		configFile: env("TTS_CONFIG_FILE", filepath.Join(dataDir, "config.json")),

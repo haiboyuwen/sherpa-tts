@@ -33,24 +33,39 @@ type engineSpec struct {
 	label   string
 	voices  []voiceInfo
 	config  func(dir string, threads int) *sherpa.OfflineTtsConfig
+	// extras 是归档之外的独立文件（如 vocoder），从同站点的其它 release 下载到解压目录。
+	extras []extraFile
+	// dynamicVoices = true 表示音色来自参考音频目录（zipvoice 克隆模型）。
+	dynamicVoices bool
+}
+
+type extraFile struct {
+	release string // GitHub release 名，如 vocoder-models
+	file    string // 资产文件名
 }
 
 var specs = map[string]engineSpec{
-	"kokoro": {
-		archive: "kokoro-multi-lang-v1_1",
-		label:   "Kokoro",
-		voices:  []voiceInfo{{ID: 3, Label: "Kokoro 中文 3"}},
+	// zipvoice 是零样本克隆模型：没有固定音色表，音色 = voices 目录里的一对文件
+	// <名字>.wav（5–10 秒参考音频）+ <名字>.txt（参考文字）。包内自带 leijun 示例。
+	"zipvoice": {
+		archive:       "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia",
+		label:         "ZipVoice 克隆",
+		dynamicVoices: true,
+		extras:        []extraFile{{release: "vocoder-models", file: "vocos_24khz.onnx"}},
 		config: func(d string, threads int) *sherpa.OfflineTtsConfig {
-			cfg := &sherpa.OfflineTtsConfig{RuleFsts: d + "/date-zh.fst," + d + "/number-zh.fst," + d + "/phone-zh.fst", MaxNumSentences: 1}
-			cfg.Model.Kokoro = sherpa.OfflineTtsKokoroModelConfig{
-				Model:       d + "/model.onnx",
-				Voices:      d + "/voices.bin",
-				Tokens:      d + "/tokens.txt",
-				DataDir:     d + "/espeak-ng-data",
-				DictDir:     d + "/dict",
-				Lexicon:     d + "/lexicon-zh.txt," + d + "/lexicon-us-en.txt",
-				Lang:        "zh",
-				LengthScale: 1.0,
+			// 缩放参数取 ZipVoice 上游默认值；蒸馏模型 4 步即可。
+			cfg := &sherpa.OfflineTtsConfig{}
+			cfg.Model.Zipvoice = sherpa.OfflineTtsZipvoiceModelConfig{
+				Tokens:        d + "/tokens.txt",
+				Encoder:       d + "/encoder.int8.onnx",
+				Decoder:       d + "/decoder.int8.onnx",
+				DataDir:       d + "/espeak-ng-data",
+				Lexicon:       d + "/lexicon.txt",
+				Vocoder:       d + "/vocos_24khz.onnx",
+				FeatScale:     0.05,
+				TShift:        0.5,
+				TargetRms:     0.1,
+				GuidanceScale: 1.0,
 			}
 			cfg.Model.NumThreads = threads
 			cfg.Model.Provider = "cpu"
@@ -87,6 +102,7 @@ var (
 type engine struct {
 	name string
 	spec engineSpec
+	reg  *registry
 
 	mu    sync.Mutex // 同一引擎串行推理
 	tts   *sherpa.OfflineTts
@@ -96,18 +112,19 @@ type engine struct {
 }
 
 type registry struct {
-	modelDir string
-	mirror   string
-	threads  int
-	engines  map[string]*engine
+	modelDir  string
+	voicesDir string
+	mirror    string
+	threads   int
+	engines   map[string]*engine
 }
 
-func newRegistry(modelDir, mirror string, threads int, enabled []string) *registry {
-	r := &registry{modelDir: modelDir, mirror: strings.TrimRight(mirror, "/"), threads: threads, engines: map[string]*engine{}}
+func newRegistry(modelDir, voicesDir, mirror string, threads int, enabled []string) *registry {
+	r := &registry{modelDir: modelDir, voicesDir: voicesDir, mirror: strings.TrimRight(mirror, "/"), threads: threads, engines: map[string]*engine{}}
 	for _, name := range enabled {
 		name = strings.TrimSpace(name)
 		if spec, ok := specs[name]; ok {
-			r.engines[name] = &engine{name: name, spec: spec}
+			r.engines[name] = &engine{name: name, spec: spec, reg: r}
 		}
 	}
 	return r
@@ -150,7 +167,7 @@ func (r *registry) health() map[string]any {
 	out := map[string]any{}
 	for name, e := range r.engines {
 		e.state.Lock()
-		out[name] = map[string]any{"label": e.spec.label, "ready": e.ready, "error": e.err, "voices": e.spec.voices}
+		out[name] = map[string]any{"label": e.spec.label, "ready": e.ready, "error": e.err, "voices": e.listVoices()}
 		e.state.Unlock()
 	}
 	return out
@@ -162,7 +179,87 @@ func (e *engine) isReady() bool {
 	return e.ready
 }
 
-func (e *engine) synthesize(voice int, text string) ([]byte, error) {
+// listVoices 返回对外音色：静态表（melo）或参考音频目录扫描（zipvoice）。
+func (e *engine) listVoices() []voiceInfo {
+	if !e.spec.dynamicVoices {
+		return e.spec.voices
+	}
+	entries, err := os.ReadDir(e.reg.voicesDir)
+	if err != nil {
+		return []voiceInfo{{ID: 1, Label: "leijun"}}
+	}
+	var out []voiceInfo
+	for _, f := range entries {
+		name := f.Name()
+		if !f.Type().IsRegular() || !strings.HasSuffix(name, ".wav") {
+			continue
+		}
+		stem := strings.TrimSuffix(name, ".wav")
+		if _, err := os.Stat(filepath.Join(e.reg.voicesDir, stem+".txt")); err != nil {
+			continue // 缺参考文本不成音色
+		}
+		out = append(out, voiceInfo{ID: 0, Label: stem})
+	}
+	// Label 即克隆音色名：resolveReference 按 <名字>.wav/.txt 查找，必须与文件名一致。
+	out = append(out, voiceInfo{ID: 1, Label: "leijun"})
+	return out
+}
+
+// leijun 是模型包自带的参考音频与文字，用来开箱验证克隆效果。
+const leijunRefText = "那还是三十六年前，一九八七年。我呢，考上了武汉大学的计算机系。"
+
+// resolveReference 把音色名解析成参考音频采样、采样率和参考文字。
+func (e *engine) resolveReference(voice string) ([]float32, int, string, error) {
+	if voice == "leijun" {
+		data, err := os.ReadFile(filepath.Join(e.reg.modelDir, e.spec.archive, "test_wavs", "leijun-1.wav"))
+		if err != nil {
+			return nil, 0, "", err
+		}
+		samples, sr, err := decodeWAV(data)
+		return samples, sr, leijunRefText, err
+	}
+	if strings.ContainsAny(voice, "/\\\x00") || strings.HasPrefix(voice, ".") {
+		return nil, 0, "", errors.New("非法音色名")
+	}
+	dir := e.reg.voicesDir
+	text, err := os.ReadFile(filepath.Join(dir, voice+".txt"))
+	if err != nil {
+		return nil, 0, "", errors.New("音色缺少参考文本 " + voice + ".txt")
+	}
+	wav, err := os.ReadFile(filepath.Join(dir, voice+".wav"))
+	if err != nil {
+		return nil, 0, "", errors.New("音色缺少参考音频 " + voice + ".wav")
+	}
+	samples, sr, err := decodeWAV(wav)
+	if err != nil {
+		return nil, 0, "", err
+	}
+	if len(samples) < sr {
+		return nil, 0, "", errors.New("参考音频太短，至少 1 秒")
+	}
+	if len(samples) > sr*30 {
+		return nil, 0, "", errors.New("参考音频太长，请剪到 30 秒内（建议 5–10 秒）")
+	}
+	refText := strings.TrimSpace(string(text))
+	// 参考文字必须正好是参考音频里读出的内容。文字比音频多时，ZipVoice 会把
+	// 音频里没读到的那部分挪到生成结果开头念出来。正常语速约 5–7.5 字/秒，
+	// 按有声时长算超过 maxRefCharsPerSec 基本就是文字和音频对不上。
+	if n, vs := countSpokenUnits(refText), voicedSeconds(samples, sr); vs > 0 && float64(n)/vs > maxRefCharsPerSec {
+		return nil, 0, "", fmt.Errorf("参考文本与参考音频不匹配：%s.wav 只有约 %.1f 秒人声，%s.txt 却有 %d 个字，请让文本与音频逐字对应", voice, vs, voice, n)
+	}
+	return samples, sr, refText, nil
+}
+
+const maxRefCharsPerSec = 9.0
+
+var spokenUnit = regexp.MustCompile(`\p{Han}|[A-Za-z]+|\d`)
+
+// countSpokenUnits 统计要念出的单位数：每个汉字、每个英文单词、每个数字各算一个。
+func countSpokenUnits(text string) int {
+	return len(spokenUnit.FindAllStringIndex(text, -1))
+}
+
+func (e *engine) synthesize(voice string, text string) ([]byte, error) {
 	if !e.isReady() {
 		return nil, errNotReady
 	}
@@ -171,7 +268,28 @@ func (e *engine) synthesize(voice int, text string) ([]byte, error) {
 		return nil, errEmptyText
 	}
 	e.mu.Lock()
-	audio := e.tts.Generate(text, voice, 1.0)
+	var audio *sherpa.GeneratedAudio
+	if e.spec.dynamicVoices {
+		refSamples, refSR, refText, err := e.resolveReference(voice)
+		if err != nil {
+			e.mu.Unlock()
+			return nil, err
+		}
+		audio = e.tts.GenerateWithConfig(text, &sherpa.GenerationConfig{
+			Speed:               1.0,
+			NumSteps:            4, // 蒸馏模型官方推荐步数
+			ReferenceAudio:      refSamples,
+			ReferenceSampleRate: refSR,
+			ReferenceText:       refText,
+		}, nil)
+	} else {
+		id, err := strconv.Atoi(voice)
+		if err != nil {
+			e.mu.Unlock()
+			return nil, errors.New("未知音色 " + voice)
+		}
+		audio = e.tts.Generate(text, id, 1.0)
+	}
 	e.mu.Unlock()
 	if audio == nil || len(audio.Samples) == 0 {
 		return nil, errors.New("no audio generated")
@@ -218,10 +336,41 @@ func (r *registry) download(e *engine) (string, error) {
 	if err := untar(tar.NewReader(bzip2.NewReader(resp.Body)), r.modelDir); err != nil {
 		return "", err
 	}
+	for _, x := range e.spec.extras {
+		if err := r.downloadExtra(dir, x); err != nil {
+			return "", err
+		}
+	}
 	if err := os.WriteFile(filepath.Join(dir, ".complete"), nil, 0o644); err != nil {
 		return "", err
 	}
 	return dir, nil
+}
+
+// downloadExtra 下载归档外的独立文件（如 vocoder）。镜像源按 GitHub releases/download
+// 目录结构镜像整棵树，所以把镜像 URL 最后一段（tts-models）换成目标 release 名即可。
+func (r *registry) downloadExtra(dir string, x extraFile) error {
+	dst := filepath.Join(dir, x.file)
+	if _, err := os.Stat(dst); err == nil {
+		return nil
+	}
+	base := r.mirror[:strings.LastIndex(r.mirror, "/")]
+	url := base + "/" + x.release + "/" + x.file
+	log.Printf("[%s] downloading %s", "", url)
+	client := http.Client{Timeout: 60 * time.Minute}
+	resp, err := client.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<30))
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, body, 0o644)
 }
 
 // untar 解到 dest；拒绝越界路径和链接。
@@ -276,8 +425,12 @@ func (p localProvider) Voices(context.Context) ([]tts.VoiceOption, error) {
 		if !e.isReady() {
 			continue
 		}
-		for _, v := range e.spec.voices {
-			voices = append(voices, tts.VoiceOption{ID: name + ":" + strconv.Itoa(v.ID), Label: v.Label})
+		for _, v := range e.listVoices() {
+			id := strconv.Itoa(v.ID)
+			if e.spec.dynamicVoices {
+				id = v.Label // zipvoice 音色 ID 是名字,如 zipvoice:旁白1
+			}
+			voices = append(voices, tts.VoiceOption{ID: name + ":" + id, Label: v.Label})
 		}
 	}
 	return voices, nil
@@ -285,12 +438,11 @@ func (p localProvider) Voices(context.Context) ([]tts.VoiceOption, error) {
 
 func (p localProvider) Synthesize(_ context.Context, voice, text string) (tts.Audio, error) {
 	name, sid, _ := strings.Cut(voice, ":")
-	id, err := strconv.Atoi(sid)
 	e, ok := p.reg.engines[name]
-	if err != nil || !ok {
+	if !ok {
 		return tts.Audio{}, &tts.ProviderError{Provider: "本地模型", Message: "未知音色 " + voice}
 	}
-	audio, err := e.synthesize(id, text)
+	audio, err := e.synthesize(sid, text)
 	if err != nil {
 		return tts.Audio{}, &tts.ProviderError{Provider: "本地模型", Message: err.Error()}
 	}

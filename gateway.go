@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -178,7 +179,7 @@ func (g *gateway) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 
 type legacySynthesizeRequest struct {
 	Engine string `json:"engine"`
-	Voice  int    `json:"voice"`
+	Voice  int    `json:"voice"` // 旧客户端用数字 sid;zipvoice 不走这个接口
 	Text   string `json:"text"`
 }
 
@@ -197,7 +198,7 @@ func (g *gateway) handleLegacySynthesize(w http.ResponseWriter, req *http.Reques
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "text too long"})
 		return
 	}
-	audio, err := e.synthesize(body.Voice, body.Text)
+	audio, err := e.synthesize(strconv.Itoa(body.Voice), body.Text)
 	switch {
 	case errors.Is(err, errNotReady):
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "engine not ready"})

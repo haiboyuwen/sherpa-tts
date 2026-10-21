@@ -18,7 +18,7 @@ func newTestGateway(t *testing.T, token string, env map[string]string) (http.Han
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.json")
 	g, err := newGateway(gatewayOptions{
-		registry:   newRegistry(dir, "", 1, nil), // 无本地引擎
+		registry:   newRegistry(dir, dir+"/voices", "", 1, nil), // 无本地引擎
 		configFile: file,
 		cacheDir:   filepath.Join(dir, "cache"),
 		apiToken:   token,

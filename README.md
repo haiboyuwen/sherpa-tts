@@ -38,6 +38,10 @@ docker run -d --name tts -p 127.0.0.1:8000:8000 \
 
 `types` 描述每种第三方类型的表单字段（`fields`：key / label / required / secret / placeholder / help）、默认音色和文档链接，配置页照着渲染即可，新增提供商不用改前端。旧客户端存的 `melo:0` 这类音色会自动路由到本地模型。
 
+本地音色：MeloTTS 1 个（`local:melo:0`）。
+
+**ZipVoice 克隆**（`local:zipvoice:<名字>`）：零样本声音克隆模型，音质和语调上限高于 Kokoro，CPU 上较慢，合成一句约需数秒。音色 = 参考音频：在数据卷建 `voices/` 目录，每个音色放一对文件——`<名字>.wav`（16 位 PCM，5–10 秒干净单人朗读）和 `<名字>.txt`（与音频逐字一致的参考文本，≤600 字限制同样适用正文）。内置 `local:zipvoice:leijun` 示例可直接试效果。GPU 无关、数据不出内网；许可证 Apache-2.0。
+
 ### 第三方提供商
 
 | 类型 | 必填 | 说明 |
@@ -57,7 +61,7 @@ docker run -d --name tts -p 127.0.0.1:8000:8000 \
 | `TTS_API_TOKEN` | 空 | 设置后 `/v1/*` 需要 Bearer 令牌 |
 | `TTS_MODEL_DIR` | `/models` | 本地模型目录 |
 | `TTS_DATA_DIR` | `/data` | 配置（`config.json`）与缓存目录 |
-| `TTS_ENGINES` | `melo,kokoro` | 本地引擎；`none` = 不启用 |
+| `TTS_ENGINES` | `melo,zipvoice` | 本地引擎；`none` = 不启用 |
 | `TTS_THREADS` | `4` | 每个本地引擎的推理线程数 |
 | `TTS_MODEL_MIRROR` | sherpa-onnx `tts-models` release | 模型下载源 |
 

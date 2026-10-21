@@ -25,6 +25,59 @@ var qwenDefaultVoices = []VoiceOption{
 	{ID: "Chelsie", Label: "Chelsie"}, {ID: "Serena", Label: "Serena"},
 }
 
+// qwen3DefaultVoices 是 qwen3-tts-flash 的系统音色（文档：qwen-tts-voice-list），
+// 后 10 个是方言音色，同时支持普通话等标准语种。
+var qwen3DefaultVoices = []VoiceOption{
+	{ID: "Cherry", Label: "Cherry 芊悦 · 女 · 阳光亲切的姐姐"},
+	{ID: "Serena", Label: "Serena 苏瑶 · 女 · 温柔的姐姐"},
+	{ID: "Ethan", Label: "Ethan 晨煦 · 男 · 标准普通话带北方口音，阳光温暖"},
+	{ID: "Chelsie", Label: "Chelsie 千雪 · 女 · 二次元虚拟女友"},
+	{ID: "Momo", Label: "Momo 茉兔 · 女 · 撒娇搞怪"},
+	{ID: "Vivian", Label: "Vivian 十三 · 女 · 拽拽的小暴躁"},
+	{ID: "Moon", Label: "Moon 月白 · 男 · 率性帅气"},
+	{ID: "Maia", Label: "Maia 四月 · 女 · 知性温柔"},
+	{ID: "Kai", Label: "Kai 凯 · 男 · 耳朵的SPA"},
+	{ID: "Nofish", Label: "Nofish 不吃鱼 · 男 · 不卷舌的设计师"},
+	{ID: "Bella", Label: "Bella 萌宝 · 女 · 小萝莉"},
+	{ID: "Jennifer", Label: "Jennifer 詹妮弗 · 女 · 电影质感美式女声"},
+	{ID: "Ryan", Label: "Ryan 甜茶 · 男 · 戏感饱满，张力十足"},
+	{ID: "Katerina", Label: "Katerina 卡捷琳娜 · 女 · 御姐，韵律感强"},
+	{ID: "Aiden", Label: "Aiden 艾登 · 男 · 美式大男孩"},
+	{ID: "Eldric Sage", Label: "Eldric Sage 沧明子 · 男 · 沉稳睿智的老者"},
+	{ID: "Mia", Label: "Mia 乖小妹 · 女 · 温顺乖巧"},
+	{ID: "Mochi", Label: "Mochi 沙小弥 · 男 · 早慧的小大人"},
+	{ID: "Bellona", Label: "Bellona 燕铮莺 · 女 · 洪亮清晰，适合武侠叙事"},
+	{ID: "Vincent", Label: "Vincent 田叔 · 男 · 沙哑烟嗓，江湖豪情"},
+	{ID: "Bunny", Label: "Bunny 萌小姬 · 女 · 萌系小萝莉"},
+	{ID: "Neil", Label: "Neil 阿闻 · 男 · 新闻主持风格"},
+	{ID: "Elias", Label: "Elias 墨讲师 · 女 · 严谨的讲师"},
+	{ID: "Arthur", Label: "Arthur 徐大爷 · 男 · 质朴嗓音，讲乡间奇闻"},
+	{ID: "Nini", Label: "Nini 邻家妹妹 · 女 · 软糯甜美"},
+	{ID: "Seren", Label: "Seren 小婉 · 女 · 温和舒缓，适合助眠"},
+	{ID: "Pip", Label: "Pip 顽屁小孩 · 男 · 调皮的小孩"},
+	{ID: "Stella", Label: "Stella 少女阿月 · 女 · 甜美迷糊的少女"},
+	{ID: "Bodega", Label: "Bodega 博德加 · 男 · 热情的西班牙大叔"},
+	{ID: "Sonrisa", Label: "Sonrisa 索尼莎 · 女 · 开朗的拉美大姐"},
+	{ID: "Alek", Label: "Alek 阿列克 · 男 · 俄式，外冷内热"},
+	{ID: "Dolce", Label: "Dolce 多尔切 · 男 · 慵懒的意大利大叔"},
+	{ID: "Sohee", Label: "Sohee 素熙 · 女 · 温柔的韩国姐姐"},
+	{ID: "Ono Anna", Label: "Ono Anna 小野杏 · 女 · 鬼灵精怪的青梅竹马"},
+	{ID: "Lenn", Label: "Lenn 莱恩 · 男 · 理性的德国青年"},
+	{ID: "Emilien", Label: "Emilien 埃米尔安 · 男 · 浪漫的法国大哥哥"},
+	{ID: "Andre", Label: "Andre 安德雷 · 男 · 磁性沉稳"},
+	{ID: "Radio Gol", Label: "Radio Gol 拉迪奥·戈尔 · 男 · 足球解说"},
+	{ID: "Jada", Label: "Jada 上海-阿珍 · 女 · 上海话"},
+	{ID: "Dylan", Label: "Dylan 北京-晓东 · 男 · 北京话"},
+	{ID: "Li", Label: "Li 南京-老李 · 男 · 南京话"},
+	{ID: "Marcus", Label: "Marcus 陕西-秦川 · 男 · 陕西话"},
+	{ID: "Roy", Label: "Roy 闽南-阿杰 · 男 · 闽南语"},
+	{ID: "Peter", Label: "Peter 天津-李彼得 · 男 · 天津话"},
+	{ID: "Sunny", Label: "Sunny 四川-晴儿 · 女 · 四川话"},
+	{ID: "Eric", Label: "Eric 四川-程川 · 男 · 四川话"},
+	{ID: "Rocky", Label: "Rocky 粤语-阿强 · 男 · 粤语"},
+	{ID: "Kiki", Label: "Kiki 粤语-阿清 · 女 · 粤语"},
+}
+
 func (p *dashScopeProvider) model() string {
 	if p.cfg.Model != "" {
 		return p.cfg.Model
@@ -45,6 +98,9 @@ func (p *dashScopeProvider) base() string {
 
 func (p *dashScopeProvider) Voices(context.Context) ([]VoiceOption, error) {
 	if len(p.cfg.Voices) == 0 && p.isQwen() {
+		if strings.HasPrefix(strings.ToLower(p.model()), "qwen3-tts") {
+			return qwen3DefaultVoices, nil
+		}
 		return qwenDefaultVoices, nil
 	}
 	return configuredVoices(p.cfg), nil
