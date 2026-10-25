@@ -46,7 +46,7 @@ type extraFile struct {
 
 var specs = map[string]engineSpec{
 	// zipvoice 是零样本克隆模型：没有固定音色表，音色 = voices 目录里的一对文件
-	// <名字>.wav（5–10 秒参考音频）+ <名字>.txt（参考文字）。包内自带 leijun 示例。
+	// <名字>.wav（参考音频）+ <名字>.txt（参考文字）。
 	"zipvoice": {
 		archive:       "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia",
 		label:         "ZipVoice 克隆",
@@ -62,7 +62,7 @@ var specs = map[string]engineSpec{
 				DataDir:       d + "/espeak-ng-data",
 				Lexicon:       d + "/lexicon.txt",
 				Vocoder:       d + "/vocos_24khz.onnx",
-				FeatScale:     0.05,
+				FeatScale:     0.1,
 				TShift:        0.5,
 				TargetRms:     0.1,
 				GuidanceScale: 1.0,
@@ -186,7 +186,7 @@ func (e *engine) listVoices() []voiceInfo {
 	}
 	entries, err := os.ReadDir(e.reg.voicesDir)
 	if err != nil {
-		return []voiceInfo{{ID: 1, Label: "leijun"}}
+		return nil
 	}
 	var out []voiceInfo
 	for _, f := range entries {
@@ -195,30 +195,18 @@ func (e *engine) listVoices() []voiceInfo {
 			continue
 		}
 		stem := strings.TrimSuffix(name, ".wav")
-		if _, err := os.Stat(filepath.Join(e.reg.voicesDir, stem+".txt")); err != nil {
-			continue // 缺参考文本不成音色
+		if _, _, _, err := e.resolveReference(stem); err != nil {
+			continue
 		}
 		out = append(out, voiceInfo{ID: 0, Label: stem})
 	}
-	// Label 即克隆音色名：resolveReference 按 <名字>.wav/.txt 查找，必须与文件名一致。
-	out = append(out, voiceInfo{ID: 1, Label: "leijun"})
+	// Label 即克隆音色名，与目录内的文件名一致。
 	return out
 }
 
-// leijun 是模型包自带的参考音频与文字，用来开箱验证克隆效果。
-const leijunRefText = "那还是三十六年前，一九八七年。我呢，考上了武汉大学的计算机系。"
-
 // resolveReference 把音色名解析成参考音频采样、采样率和参考文字。
 func (e *engine) resolveReference(voice string) ([]float32, int, string, error) {
-	if voice == "leijun" {
-		data, err := os.ReadFile(filepath.Join(e.reg.modelDir, e.spec.archive, "test_wavs", "leijun-1.wav"))
-		if err != nil {
-			return nil, 0, "", err
-		}
-		samples, sr, err := decodeWAV(data)
-		return samples, sr, leijunRefText, err
-	}
-	if strings.ContainsAny(voice, "/\\\x00") || strings.HasPrefix(voice, ".") {
+	if voice == "" || strings.ContainsAny(voice, "/\\\x00") || strings.HasPrefix(voice, ".") {
 		return nil, 0, "", errors.New("非法音色名")
 	}
 	dir := e.reg.voicesDir
@@ -241,6 +229,9 @@ func (e *engine) resolveReference(voice string) ([]float32, int, string, error) 
 		return nil, 0, "", errors.New("参考音频太长，请剪到 30 秒内（建议 5–10 秒）")
 	}
 	refText := strings.TrimSpace(string(text))
+	if refText == "" {
+		return nil, 0, "", errors.New("参考文本不能为空")
+	}
 	// 参考文字必须正好是参考音频里读出的内容。文字比音频多时，ZipVoice 会把
 	// 音频里没读到的那部分挪到生成结果开头念出来。正常语速约 5–7.5 字/秒，
 	// 按有声时长算超过 maxRefCharsPerSec 基本就是文字和音频对不上。

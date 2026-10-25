@@ -1,4 +1,4 @@
-// Command sherpa-tts 是中文语音合成网关：内置本地模型（sherpa-onnx + Kokoro / MeloTTS，纯 CPU），
+// Command sherpa-tts 是中文语音合成网关：默认使用 ZipVoice 及 voices 目录内的音色（纯 CPU），
 // 并可配置第三方服务（OpenAI 兼容、Azure、阿里云百炼、火山引擎豆包）。应用后端把朗读请求和
 // 后台配置都转发到这里；配置接口由 sherpa-tts 提供，各项目自己实现配置页面。
 //
@@ -48,7 +48,7 @@ func main() {
 		voicesDir,
 		env("TTS_MODEL_MIRROR", "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models"),
 		threads,
-		strings.Split(env("TTS_ENGINES", "melo,zipvoice"), ","),
+		strings.Split(env("TTS_ENGINES", "zipvoice"), ","),
 	)
 	reg.loadAll()
 	gw, err := newGateway(gatewayOptions{
