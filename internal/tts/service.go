@@ -263,7 +263,7 @@ func (s *Service) Synthesize(ctx context.Context, voiceID, text string) (Audio, 
 
 // CacheVersion 参与缓存 key。改动音频编码、文本预处理或本地推理参数后递增，
 // 让旧缓存自动失效（旧文件由容量淘汰清理）。
-var CacheVersion = "3"
+var CacheVersion = "4"
 
 var cacheExts = map[string]string{"audio/mpeg": ".mp3", "audio/mp3": ".mp3", "audio/wav": ".wav", "audio/x-wav": ".wav", "audio/wave": ".wav", "audio/ogg": ".ogg", "audio/opus": ".opus", "audio/aac": ".aac"}
 var extTypes = map[string]string{".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".opus": "audio/ogg", ".aac": "audio/aac"}

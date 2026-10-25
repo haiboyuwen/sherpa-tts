@@ -288,20 +288,27 @@ func (e *engine) synthesize(voice string, text string) ([]byte, error) {
 	return encodeMP3(audio.Samples, audio.SampleRate)
 }
 
-// 模型的词表不认弯引号、书名号等，统一压成普通标点。
+// 模型的词表不认弯引号、书名号等。引号 / 括号直接去掉而不是改成逗号：
+// 否则 “老牛，刨！” 会变成 ，老牛，刨！，，多出首尾停顿，“哞！” 这类短句更容易被吞。
 var punct = strings.NewReplacer(
-	"“", "，", "”", "，", "‘", "，", "’", "，", "「", "，", "」", "，", "『", "，", "』", "，",
-	"《", "", "》", "", "（", "，", "）", "，", "(", "，", ")", "，", "—", "，", "…", "。",
+	"“", "", "”", "", "‘", "", "’", "", "「", "", "」", "", "『", "", "』", "",
+	"《", "", "》", "", "（", "", "）", "", "(", "", ")", "", "—", "，", "…", "。",
 )
 var (
 	repeatedComma = regexp.MustCompile(`[，,]{2,}`)
+	repeatedStop  = regexp.MustCompile(`[。]{2,}`)
+	commaAfterEnd = regexp.MustCompile(`([。！？!?；;])[，,]+`)
+	leadingComma  = regexp.MustCompile(`^[，,]+`)
 	spaces        = regexp.MustCompile(`\s+`)
 )
 
 func normalize(text string) string {
 	text = punct.Replace(text)
 	text = repeatedComma.ReplaceAllString(text, "，")
-	return strings.TrimSpace(spaces.ReplaceAllString(text, " "))
+	text = repeatedStop.ReplaceAllString(text, "。")
+	text = commaAfterEnd.ReplaceAllString(text, "$1")
+	text = strings.TrimSpace(spaces.ReplaceAllString(text, " "))
+	return leadingComma.ReplaceAllString(text, "")
 }
 
 // download 确保模型解压在 modelDir/<archive>，完成后写 .complete 标记。

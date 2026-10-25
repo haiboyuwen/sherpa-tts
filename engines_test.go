@@ -158,3 +158,29 @@ func TestRepositoryZipvoiceVoices(t *testing.T) {
 		t.Fatalf("目录音色应可选，已停用的 Melo 默认值应忽略：%+v", response)
 	}
 }
+
+func TestNormalizeKeepsShortSpeech(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"“老牛，刨！”", "老牛，刨！"},
+		{"哞！", "哞！"},
+		{"一人一牛", "一人一牛"},
+		{"他说：“哞！”然后继续。", "他说：哞！然后继续。"},
+		{"“走走走……”，他说。", "走走走。他说。"},
+		{"  （笑）  ", "笑"},
+	}
+	for _, c := range cases {
+		if got := normalize(c.in); got != c.want {
+			t.Errorf("normalize(%q) = %q，期望 %q", c.in, got, c.want)
+		}
+	}
+	// 汉字和重复字不能因为预处理被删除。
+	for _, text := range []string{"一人一牛", "哞！", "“老牛，刨！”"} {
+		before, after := countSpokenUnits(text), countSpokenUnits(normalize(text))
+		if before != after {
+			t.Errorf("%q 的有效字数被改动：%d → %d", text, before, after)
+		}
+	}
+	if strings.HasPrefix(normalize("“老牛，刨！”"), "，") || strings.Contains(normalize("“老牛，刨！”"), "！，") {
+		t.Errorf("引号不应制造多余逗号：%q", normalize("“老牛，刨！”"))
+	}
+}
