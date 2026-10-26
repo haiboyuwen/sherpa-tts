@@ -167,10 +167,20 @@ func TestNormalizeKeepsShortSpeech(t *testing.T) {
 		{"他说：“哞！”然后继续。", "他说：哞！然后继续。"},
 		{"“走走走……”，他说。", "走走走。他说。"},
 		{"  （笑）  ", "笑"},
+		{"red(blue)green", "red blue green"},
+		{"1（2）3", "1 2 3"},
+		{"red（blue(green)）white", "red blue green white"},
+		{"one\ntwo\nthree", "one two three"},
+		{"1\n2\n3", "1 2 3"},
+		{"（）( )", ""},
 	}
 	for _, c := range cases {
-		if got := normalize(c.in); got != c.want {
+		got := normalize(c.in)
+		if got != c.want {
 			t.Errorf("normalize(%q) = %q，期望 %q", c.in, got, c.want)
+		}
+		if again := normalize(got); again != got {
+			t.Errorf("normalize 不幂等：%q → %q", got, again)
 		}
 	}
 	// 汉字和重复字不能因为预处理被删除。

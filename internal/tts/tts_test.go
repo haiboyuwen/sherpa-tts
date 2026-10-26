@@ -3,7 +3,9 @@ package tts
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -92,14 +94,45 @@ func TestServiceCachesAndRoutesLegacyVoice(t *testing.T) {
 	}
 }
 
+func TestServiceDiscardsOldAudioCache(t *testing.T) {
+	local := &fakeLocal{}
+	s := newService(t, Config{}, local)
+	entry, voice, ok := s.route("local:melo:0")
+	if !ok {
+		t.Fatal("本地音色不可用")
+	}
+	text := "“老牛，刨！”哞！"
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		"4", entry.cfg.Type, entry.cfg.ID, entry.cfg.BaseURL, entry.cfg.Model, entry.cfg.Instructions, voice, text,
+	}, "\x00")))
+	oldKey := hex.EncodeToString(sum[:])
+	s.writeCache(oldKey, Audio{Data: []byte("old audio"), ContentType: "audio/mpeg"})
+	if _, ok := s.readCache(oldKey); !ok {
+		t.Fatal("旧版缓存测试素材未写入")
+	}
+	for i := 0; i < 2; i++ {
+		audio, err := s.Synthesize(context.Background(), "local:melo:0", text)
+		if err != nil || string(audio.Data) != "MP3:"+text {
+			t.Fatalf("第 %d 次未使用新音频：%q %v", i, audio.Data, err)
+		}
+	}
+	if local.calls.Load() != 1 {
+		t.Fatalf("新缓存应复用，provider 调用了 %d 次", local.calls.Load())
+	}
+}
+
 func TestServiceRejectsBadInput(t *testing.T) {
 	s := newService(t, Config{}, nil)
 	if _, err := s.Synthesize(context.Background(), "x:y", "你好"); err != ErrUnavailable {
 		t.Fatalf("no providers: %v", err)
 	}
-	s = newService(t, Config{}, &fakeLocal{})
+	local := &fakeLocal{}
+	s = newService(t, Config{}, local)
 	if _, err := s.Synthesize(context.Background(), "local:melo:0", strings.Repeat("字", 601)); err != ErrTextTooLong {
 		t.Fatalf("too long: %v", err)
+	}
+	if local.calls.Load() != 0 {
+		t.Fatal("超长请求不应调用模型")
 	}
 	if StatusFor(ErrTextTooLong) != http.StatusRequestEntityTooLarge || StatusFor(ErrUnavailable) != http.StatusServiceUnavailable {
 		t.Fatal("status mapping")

@@ -266,13 +266,19 @@ func (e *engine) synthesize(voice string, text string) ([]byte, error) {
 			e.mu.Unlock()
 			return nil, err
 		}
-		audio = e.tts.GenerateWithConfig(text, &sherpa.GenerationConfig{
+		audio, err = generateZipvoice(text, sherpa.GenerationConfig{
 			Speed:               1.0,
 			NumSteps:            4, // 蒸馏模型官方推荐步数
 			ReferenceAudio:      refSamples,
 			ReferenceSampleRate: refSR,
 			ReferenceText:       refText,
-		}, nil)
+		}, func(chunk string, config *sherpa.GenerationConfig) *sherpa.GeneratedAudio {
+			return e.tts.GenerateWithConfig(chunk, config, nil)
+		})
+		if err != nil {
+			e.mu.Unlock()
+			return nil, err
+		}
 	} else {
 		id, err := strconv.Atoi(voice)
 		if err != nil {
@@ -288,11 +294,11 @@ func (e *engine) synthesize(voice string, text string) ([]byte, error) {
 	return encodeMP3(audio.Samples, audio.SampleRate)
 }
 
-// 模型的词表不认弯引号、书名号等。引号 / 括号直接去掉而不是改成逗号：
-// 否则 “老牛，刨！” 会变成 ，老牛，刨！，，多出首尾停顿，“哞！” 这类短句更容易被吞。
+// 模型的词表不认弯引号、书名号等。引号去掉，避免制造首尾逗号；
+// 括号保留为空格，防止 red(blue)green 或 1（2）3 粘连成另一个词或数值。
 var punct = strings.NewReplacer(
 	"“", "", "”", "", "‘", "", "’", "", "「", "", "」", "", "『", "", "』", "",
-	"《", "", "》", "", "（", "", "）", "", "(", "", ")", "", "—", "，", "…", "。",
+	"《", "", "》", "", "（", " ", "）", " ", "(", " ", ")", " ", "—", "，", "…", "。",
 )
 var (
 	repeatedComma = regexp.MustCompile(`[，,]{2,}`)
